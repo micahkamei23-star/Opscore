@@ -102,18 +102,21 @@ export const fitnessRepository = {
   createWorkout(workout: Workout): Workout {
     ensureInit();
     const db = getDb();
-    db.prepare(`
-      INSERT INTO workouts (id, user_id, name, date, duration_minutes, total_volume, calories_burned, perceived_exertion, notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(workout.id, workout.userId, workout.name, workout.date, workout.durationMinutes, workout.totalVolume, workout.caloriesBurned, workout.perceivedExertion, workout.notes, workout.createdAt, workout.updatedAt);
+    // Atomic: insert workout header + all sets together
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO workouts (id, user_id, name, date, duration_minutes, total_volume, calories_burned, perceived_exertion, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(workout.id, workout.userId, workout.name, workout.date, workout.durationMinutes, workout.totalVolume, workout.caloriesBurned, workout.perceivedExertion, workout.notes, workout.createdAt, workout.updatedAt);
 
-    const insertSet = db.prepare(`
-      INSERT INTO workout_sets (id, workout_id, exercise_id, exercise_name, set_number, reps, weight, duration, distance, rest_seconds, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const s of workout.sets) {
-      insertSet.run(s.id, s.workoutId, s.exerciseId, s.exerciseName, s.setNumber, s.reps, s.weight, s.duration, s.distance, s.restSeconds, s.notes);
-    }
+      const insertSet = db.prepare(`
+        INSERT INTO workout_sets (id, workout_id, exercise_id, exercise_name, set_number, reps, weight, duration, distance, rest_seconds, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of workout.sets) {
+        insertSet.run(s.id, s.workoutId, s.exerciseId, s.exerciseName, s.setNumber, s.reps, s.weight, s.duration, s.distance, s.restSeconds, s.notes);
+      }
+    })();
     return workout;
   },
 
@@ -164,6 +167,30 @@ export const fitnessRepository = {
     const db = getDb();
     const rows = db.prepare("SELECT * FROM exercises ORDER BY name ASC").all() as Record<string, unknown>[];
     return rows.map(rowToExercise);
+  },
+
+  getWorkoutChartData(userId: string, sinceStr: string): Array<{ date: string; volume: number; duration: number }> {
+    ensureInit();
+    const db = getDb();
+    return db.prepare(`
+      SELECT date, SUM(total_volume) as volume, SUM(duration_minutes) as duration
+      FROM workouts
+      WHERE user_id = ? AND date >= ?
+      GROUP BY date
+      ORDER BY date ASC
+    `).all(userId, sinceStr) as Array<{ date: string; volume: number; duration: number }>;
+  },
+
+  getHabitChartData(userId: string, sinceStr: string): Array<{ date: string; completions: number }> {
+    ensureInit();
+    const db = getDb();
+    return db.prepare(`
+      SELECT date, COUNT(*) as completions
+      FROM habit_completions
+      WHERE user_id = ? AND date >= ?
+      GROUP BY date
+      ORDER BY date ASC
+    `).all(userId, sinceStr) as Array<{ date: string; completions: number }>;
   },
 
   getWorkoutStats(userId: string, days = 30): { totalWorkouts: number; totalVolume: number; avgDuration: number; totalCalories: number } {

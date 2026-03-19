@@ -116,4 +116,16 @@ export const skillsRepository = {
       timestamp: r.timestamp as number,
     }));
   },
+
+  getXPChartData(userId: string, since: number): Array<{ date: string; xp: number }> {
+    ensureInit();
+    const db = getDb();
+    return db.prepare(`
+      SELECT date(timestamp/1000, 'unixepoch') as date, SUM(amount) as xp
+      FROM xp_events
+      WHERE user_id = ? AND timestamp >= ?
+      GROUP BY date(timestamp/1000, 'unixepoch')
+      ORDER BY date ASC
+    `).all(userId, since) as Array<{ date: string; xp: number }>;
+  },
 };

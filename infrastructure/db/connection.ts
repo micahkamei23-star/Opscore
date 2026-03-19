@@ -31,3 +31,7 @@ export function closeDb(): void {
     logger.info("Database closed");
   }
 }
+
+export function withTransaction<T>(fn: () => T): T {
+  return getDb().transaction(fn)();
+}
