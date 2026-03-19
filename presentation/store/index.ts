@@ -1,6 +1,6 @@
 "use client";
 import { create } from "zustand";
-import { persist, subscribeWithSelector } from "zustand/middleware";
+import { subscribeWithSelector } from "zustand/middleware";
 import type {
   Task,
   Habit,
@@ -81,8 +81,9 @@ export const useTasksStore = create<TasksState>()(
       set({ loading: true, error: null });
       try {
         const res = await fetch("/api/tasks");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
-        set({ tasks: data.tasks, loading: false });
+        set({ tasks: data.tasks ?? [], loading: false });
       } catch (e) {
         set({ error: String(e), loading: false });
       }
@@ -94,7 +95,10 @@ export const useTasksStore = create<TasksState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(taskData),
       });
-      if (!res.ok) throw new Error("Failed to create task");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to create task");
+      }
       const { task } = await res.json();
       set((state) => ({ tasks: [task, ...state.tasks] }));
       return task;
@@ -115,7 +119,10 @@ export const useTasksStore = create<TasksState>()(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(data),
         });
-        if (!res.ok) throw new Error("Failed to update task");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error ?? "Failed to update task");
+        }
         const { task } = await res.json();
         set((state) => ({
           tasks: state.tasks.map((t) => (t.id === id ? task : t)),
@@ -132,7 +139,10 @@ export const useTasksStore = create<TasksState>()(
       set((state) => ({ tasks: state.tasks.filter((t) => t.id !== id) }));
       try {
         const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error("Failed to delete task");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error ?? "Failed to delete task");
+        }
       } catch (e) {
         set({ tasks: prev });
         throw e;
@@ -166,8 +176,9 @@ export const useHabitsStore = create<HabitsState>()(
       set({ loading: true, error: null });
       try {
         const res = await fetch("/api/habits");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
-        set({ habits: data.habits, loading: false });
+        set({ habits: data.habits ?? [], loading: false });
       } catch (e) {
         set({ error: String(e), loading: false });
       }
@@ -179,7 +190,10 @@ export const useHabitsStore = create<HabitsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(habitData),
       });
-      if (!res.ok) throw new Error("Failed to create habit");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to create habit");
+      }
       const { habit } = await res.json();
       set((state) => ({
         habits: [...state.habits, { ...habit, completedToday: false }],
@@ -188,12 +202,12 @@ export const useHabitsStore = create<HabitsState>()(
     },
 
     completeHabit: async (id, notes) => {
-      // Optimistic
+      // Optimistic: only mark completedToday — don't speculatively change streak
+      // (streak recalculation is complex; server is authoritative)
+      const prev = get().habits;
       set((state) => ({
         habits: state.habits.map((h) =>
-          h.id === id
-            ? { ...h, completedToday: true, currentStreak: h.currentStreak + 1, totalCompletions: h.totalCompletions + 1 }
-            : h
+          h.id === id ? { ...h, completedToday: true } : h
         ),
       }));
 
@@ -204,16 +218,19 @@ export const useHabitsStore = create<HabitsState>()(
           body: JSON.stringify({ notes }),
         });
         if (!res.ok) {
-          get().fetchHabits(); // re-sync on failure
-          throw new Error("Failed to complete habit");
+          set({ habits: prev });
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error ?? "Failed to complete habit");
         }
         const { habit } = await res.json();
+        // Sync with authoritative server state
         set((state) => ({
           habits: state.habits.map((h) =>
             h.id === id ? { ...habit, completedToday: true } : h
           ),
         }));
       } catch (e) {
+        // Re-sync from server on any error
         get().fetchHabits();
         throw e;
       }
@@ -245,20 +262,23 @@ export const useFitnessStore = create<FitnessState>()(
       set({ loading: true, error: null });
       try {
         const res = await fetch("/api/fitness/workouts");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
-        set({ workouts: data.workouts, loading: false });
+        set({ workouts: data.workouts ?? [], loading: false });
       } catch (e) {
         set({ error: String(e), loading: false });
       }
     },
 
     fetchBodyweight: async () => {
+      set({ loading: true, error: null });
       try {
         const res = await fetch("/api/fitness/bodyweight");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
-        set({ bodyweight: data.entries });
+        set({ bodyweight: data.entries ?? [], loading: false });
       } catch (e) {
-        set({ error: String(e) });
+        set({ error: String(e), loading: false });
       }
     },
 
@@ -268,7 +288,10 @@ export const useFitnessStore = create<FitnessState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(workoutData),
       });
-      if (!res.ok) throw new Error("Failed to create workout");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to create workout");
+      }
       const { workout } = await res.json();
       set((state) => ({ workouts: [workout, ...state.workouts] }));
       return workout;
@@ -284,7 +307,10 @@ export const useFitnessStore = create<FitnessState>()(
           date: date ?? new Date().toISOString().split("T")[0],
         }),
       });
-      if (!res.ok) throw new Error("Failed to log bodyweight");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to log bodyweight");
+      }
       const { entry } = await res.json();
       set((state) => ({ bodyweight: [entry, ...state.bodyweight] }));
     },
@@ -312,8 +338,9 @@ export const useSkillsStore = create<SkillsState>()(
       set({ loading: true, error: null });
       try {
         const res = await fetch("/api/skills");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
-        set({ skills: data.skills, loading: false });
+        set({ skills: data.skills ?? [], loading: false });
       } catch (e) {
         set({ error: String(e), loading: false });
       }
@@ -325,7 +352,10 @@ export const useSkillsStore = create<SkillsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(skillData),
       });
-      if (!res.ok) throw new Error("Failed to create skill");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to create skill");
+      }
       const { skill } = await res.json();
       set((state) => ({ skills: [...state.skills, skill] }));
       return skill;
@@ -337,7 +367,10 @@ export const useSkillsStore = create<SkillsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, source: "manual", description }),
       });
-      if (!res.ok) throw new Error("Failed to add XP");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to add XP");
+      }
       const { skill } = await res.json();
       set((state) => ({
         skills: state.skills.map((s) => (s.id === skillId ? skill : s)),
@@ -374,17 +407,20 @@ export const useSessionsStore = create<SessionsState>()(
       set({ loading: true });
       try {
         const res = await fetch("/api/sessions");
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
+        const activeSession: FocusSession | null = data.activeSession ?? null;
         set({
-          sessions: data.sessions,
-          activeSession: data.activeSession,
+          sessions: data.sessions ?? [],
+          activeSession,
           loading: false,
-          elapsedSeconds: data.activeSession
-            ? Math.floor((Date.now() - data.activeSession.startedAt - data.activeSession.totalPausedMs) / 1000)
+          elapsedSeconds: activeSession && activeSession.status === "active"
+            ? Math.floor((Date.now() - activeSession.startedAt - activeSession.totalPausedMs) / 1000)
             : 0,
         });
       } catch (e) {
         set({ loading: false });
+        console.error("fetchSessions failed:", e);
       }
     },
 
@@ -394,7 +430,10 @@ export const useSessionsStore = create<SessionsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to start session");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? "Failed to start session");
+      }
       const { session } = await res.json();
       set({ activeSession: session, elapsedSeconds: 0 });
       return session;
@@ -408,7 +447,10 @@ export const useSessionsStore = create<SessionsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "pause" }),
       });
-      if (!res.ok) throw new Error("Failed to pause session");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? "Failed to pause session");
+      }
       const { session } = await res.json();
       set({ activeSession: session });
     },
@@ -421,7 +463,10 @@ export const useSessionsStore = create<SessionsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "resume" }),
       });
-      if (!res.ok) throw new Error("Failed to resume session");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? "Failed to resume session");
+      }
       const { session } = await res.json();
       set({ activeSession: session });
     },
@@ -434,7 +479,10 @@ export const useSessionsStore = create<SessionsState>()(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "complete", notes }),
       });
-      if (!res.ok) throw new Error("Failed to complete session");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? "Failed to complete session");
+      }
       const { session } = await res.json();
       set((state) => ({
         activeSession: null,
@@ -446,11 +494,15 @@ export const useSessionsStore = create<SessionsState>()(
     abandonSession: async () => {
       const { activeSession } = get();
       if (!activeSession) return;
-      await fetch(`/api/sessions/${activeSession.id}`, {
+      const res = await fetch(`/api/sessions/${activeSession.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "abandon" }),
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? "Failed to abandon session");
+      }
       set({ activeSession: null, elapsedSeconds: 0 });
     },
 
@@ -482,6 +534,7 @@ export const useDashboardStore = create<DashboardState>()(
       set({ loading: true, error: null });
       try {
         const res = await fetch(`/api/dashboard?period=${period}`);
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
         set({ stats: data, loading: false });
       } catch (e) {
